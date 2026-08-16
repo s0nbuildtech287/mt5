@@ -253,9 +253,7 @@ def phase2_filter(df, filters=None):
         (df['Equity DD %'] >= filters['min_equity_dd']) & (df['Equity DD %'] <= filters['max_equity_dd'])
     )
     filtered_df = df[condition].copy()
-    print(f"Sau loc 6 tieu chi: {len(filtered_df)} bo")
     if filtered_df.empty:
-        print("Khong co bo nao thoa man tieu chi!")
         return filtered_df
     filtered_df['DD_Deviation'] = abs(filtered_df['Equity DD %'] - 10)
     filtered_df['Result_Priority'] = filtered_df['Result'].between(5, 8)
