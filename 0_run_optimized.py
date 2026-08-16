@@ -172,7 +172,9 @@ def phase1_optimize(ini_file, num_runs=1):
         fix_ini_before_run(path_ini, report_name)
 
         # KHÔNG kill_mt5() ở đây nữa — tránh kill profile khác!
-        print("Chay MT5 optimize...")
+        ini_size = os.path.getsize(path_ini) if os.path.exists(path_ini) else 0
+        print(f"[MT5] preparing optimization ini={path_ini} size={ini_size} bytes report={report_name}", flush=True)
+        print("[MT5] launching terminal64.exe; MT5 Tester may load missing market data internally", flush=True)
 
         # shell=False để proc.pid là PID thật của terminal64.exe
         proc = subprocess.Popen(
@@ -180,7 +182,8 @@ def phase1_optimize(ini_file, num_runs=1):
             shell=False
         )
         mt5_pid = proc.pid
-        print(f"[phase1] Spawned MT5 PID={mt5_pid}", flush=True)
+        print(f"[MT5] process started pid={mt5_pid} config={path_ini}", flush=True)
+        print(f"[MT5] waiting for report={report_name}; no explicit preload is used by this source", flush=True)
 
         found = False
         start = time.time()
@@ -188,6 +191,9 @@ def phase1_optimize(ini_file, num_runs=1):
         while (time.time() - start) < 3600:
             latest_xml = get_latest_xml(report_name)
             if latest_xml and os.path.getsize(latest_xml) > 0:
+                report_size = os.path.getsize(latest_xml)
+                elapsed = int(time.time() - start)
+                print(f"[MT5] report ready path={latest_xml} size={report_size} bytes elapsed={elapsed}s", flush=True)
                 time.sleep(2)
                 try:
                     df = parse_xml_to_dataframe(latest_xml)
@@ -206,16 +212,16 @@ def phase1_optimize(ini_file, num_runs=1):
             current_time = time.time()
             if (current_time - last_heartbeat) >= 30:
                 elapsed = int(current_time - start)
-                print(f"[HEARTBEAT] Optimize dang chay... ({elapsed}s elapsed)", flush=True)
+                print(f"[HEARTBEAT] Optimize dang chay... ({elapsed}s elapsed) pid={mt5_pid} process_poll={proc.poll()}", flush=True)
                 last_heartbeat = current_time
             
             time.sleep(10)
 
         if not found:
-            print("Timeout cho file XML")
+            print(f"[MT5] timeout waiting for report={report_name} pid={mt5_pid} process_poll={proc.poll()}", flush=True)
 
         # Kill ĐÚNG PID này thôi
-        print(f"[phase1] Killing MT5 PID={mt5_pid}", flush=True)
+        print(f"[MT5] stopping terminal pid={mt5_pid} after report/timeout", flush=True)
         config.kill_mt5(pid=mt5_pid)
         time.sleep(5)
         
@@ -226,7 +232,7 @@ def phase1_optimize(ini_file, num_runs=1):
                 time.sleep(0.5)
             except OSError:
                 # Process không tồn tại - OK
-                print(f"[phase1] MT5 PID={mt5_pid} confirmed dead", flush=True)
+                print(f"[MT5] process stopped pid={mt5_pid} confirmed_dead=True", flush=True)
                 break
         
         time.sleep(1)
