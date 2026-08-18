@@ -6,6 +6,7 @@ import time
 import io
 from glob import glob
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Tự động kiểm tra và cài đặt thư viện cần thiết nếu chưa có
 try:
@@ -22,10 +23,14 @@ except ImportError:
 
 try:
     import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
 except ImportError:
     import subprocess
     subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
     import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
 
 SERVICE_ACCOUNT_DIR = r"C:\Users\SonBx\Desktop\Lotusquant\Optimize\backend\src\config\serviceAccounts"
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
@@ -56,7 +61,6 @@ class DriveAccountManager:
     def rotate_account(self):
         self.current_idx = (self.current_idx + 1) % len(self.sa_files)
         sa_name = os.path.basename(self.sa_files[self.current_idx])
-        print(f"--> Chuyển sang Service Account: {sa_name}")
         return self.get_service()
 
 
@@ -365,9 +369,7 @@ def parse_excel_content(file_bytes):
 
 
 def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades=100, max_loss=-20000):
-    """
-    Check Group 3 & Group 4 cho 1 file Excel
-    """
+    """Check Group 3 & Group 4 cho 1 file Excel"""
     errors = []
     analyzed = analyze_file_name(file_name)
 
@@ -379,7 +381,6 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
 
     # --- GROUP 3: THÔNG TIN CƠ BẢN ---
     if analyzed['valid']:
-        # Symbol
         content_symbol = str(settings.get("Symbol", "")).strip().upper()
         if content_symbol and content_symbol != analyzed['symbol']:
             errors.append({
@@ -388,7 +389,6 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
                 "status": "LỖI"
             })
 
-        # Timeframe
         content_tf = str(settings.get("Period", "")).strip().upper()
         if content_tf and content_tf != analyzed['timeframe']:
             errors.append({
@@ -397,7 +397,6 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
                 "status": "LỖI"
             })
 
-        # BotId
         expert_str = str(settings.get("Expert", "")).strip()
         expert_match = re.match(r'^(\d{3})', expert_str)
         if expert_match and expert_match.group(1) != analyzed['bot_id']:
@@ -407,7 +406,6 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
                 "status": "LỖI"
             })
 
-    # Results metrics
     def safe_float(val):
         try: return float(val)
         except: return None
@@ -439,19 +437,15 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
             d_swap = safe_float(deal.get("swap"))
             d_vol = safe_float(deal.get("volume"))
 
-            # Swap = 0
             if d_swap is not None and d_swap != 0:
                 errors.append({"file_name": file_name, "group": 4, "description": f"Swap ≠ 0: {d_swap} (deal #{idx+1}, {d_time})", "status": "LỖI"})
 
-            # Volume > 0
             if d_vol is not None and d_vol <= 0:
                 errors.append({"file_name": file_name, "group": 4, "description": f"Volume ≤ 0: {d_vol} (deal #{idx+1}, {d_time})", "status": "LỖI"})
 
-            # Pattern comment
             if not d_comment:
                 errors.append({"file_name": file_name, "group": 3, "description": f"Comment trống (deal #{idx+1}, {d_time})", "status": "LỖI"})
 
-            # Cặp buy/buy hoặc sell/sell liền nhau
             if last_deal and last_deal.get("type") == d_type and d_direction == "in" and last_deal.get("direction") == "in":
                 if not (d_comment and last_deal.get("comment") and d_comment.split("_")[0] == last_deal.get("comment").split("_")[0]):
                     errors.append({
@@ -460,7 +454,6 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
                         "status": "LỖI"
                     })
 
-            # Mở lệnh mới khi chưa đóng lệnh cũ
             if d_direction == "in":
                 if active_opens:
                     errors.append({"file_name": file_name, "group": 4, "description": f"Mở lệnh mới khi chưa đóng lệnh cũ (deal #{idx+1})", "status": "LỖI"})
@@ -469,11 +462,9 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
             elif d_direction == "out":
                 if active_opens:
                     matched = active_opens.pop(0)
-                    # Cùng timestamp (đóng ngay sau khi mở)
                     if matched['time'] == d_time and not (d_comment.lower().startswith("sl ") or d_comment.lower().startswith("tp ")):
                         errors.append({"file_name": file_name, "group": 4, "description": f"Đóng lệnh ngay sau khi mở cùng timestamp: {d_time}", "status": "LỖI"})
                     
-                    # Giữ lệnh < 1 phút rồi đóng bằng _C / _CO
                     try:
                         t1 = datetime.strptime(matched['time'].replace(".", "-"), "%Y-%m-%dT%H:%M:%S" if "T" in matched['time'] else "%Y-%m-%d %H:%M:%S")
                         t2 = datetime.strptime(d_time.replace(".", "-"), "%Y-%m-%dT%H:%M:%S" if "T" in d_time else "%Y-%m-%d %H:%M:%S")
@@ -488,10 +479,109 @@ def check_file_content_and_deals(file_name, file_bytes, min_profit=0, min_trades
     return errors
 
 
+def fetch_and_check_single_file(service_mgr, item):
+    file_id = item['id']
+    file_name = item['name']
+    
+    for attempt in range(5):
+        try:
+            service = service_mgr.get_service()
+            try:
+                res = service.files().export(
+                    fileId=file_id,
+                    mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                ).execute()
+                file_bytes = res
+            except Exception:
+                res = service.files().get_media(fileId=file_id).execute()
+                file_bytes = res
+
+            return check_file_content_and_deals(file_name, file_bytes)
+        except Exception as e:
+            if any(k in str(e).lower() for k in ["429", "403", "quota", "rate limit"]):
+                service_mgr.rotate_account()
+                time.sleep(0.5)
+            else:
+                break
+    return [{"file_name": file_name, "group": 3, "description": "Không thể tải/đọc nội dung file từ Drive", "status": "LỖI"}]
+
+
 # ==============================================================================
-# 3. QUẢN LÝ QUÉT & BÁO CÁO
+# 3. XUẤT FILE EXCEL BÁO CÁO KẾT QUẢ
 # ==============================================================================
-def process_drive_validation(url_or_id, service_mgr, check_file_content=False):
+def export_validation_report_to_excel(output_filename, report_data, all_errors, all_files):
+    """Xuất toàn bộ dữ liệu thống kê và danh sách lỗi ra file Excel định dạng đẹp"""
+    wb = openpyxl.Workbook()
+
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    err_fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
+    err_font = Font(name="Calibri", size=11, color="C00000", bold=True)
+    align_center = Alignment(horizontal="center", vertical="center")
+
+    # Sheet 1: Thống kê số lượng file theo folder tài sản
+    ws1 = wb.active
+    ws1.title = "Thong_Ke_Tai_San"
+    ws1.append(["STT", "Tên Folder Tài Sản", "Tổng Số File", "Số File .xlsx"])
+    for cell in ws1[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = align_center
+
+    for idx, row in enumerate(report_data, 1):
+        ws1.append([idx, row['folder'], row['total_files'], row['xlsx_files']])
+        ws1.cell(row=idx+1, column=1).alignment = align_center
+        ws1.cell(row=idx+1, column=3).alignment = align_center
+        ws1.cell(row=idx+1, column=4).alignment = align_center
+
+    # Sheet 2: Danh sách lỗi Validation chi tiết
+    ws2 = wb.create_sheet(title="Danh_Sach_Loi_Validation")
+    ws2.append(["STT", "Trạng Thái", "Nhóm Lỗi", "File / Mục Bị Lỗi", "Mô Tả Chi Tiết Lỗi"])
+    for cell in ws2[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = align_center
+
+    if not all_errors:
+        ws2.append([1, "OK", "-", "-", "Toàn bộ cấu trúc folder, tên file và nội dung dữ liệu HOÀN TOÀN HỢP LỆ!"])
+    else:
+        for idx, err in enumerate(all_errors, 1):
+            ws2.append([idx, err.get('status', 'LỖI'), f"Group {err.get('group', 2)}", err.get('file_name', ''), err.get('description', '')])
+            row_idx = idx + 1
+            ws2.cell(row=row_idx, column=1).alignment = align_center
+            ws2.cell(row=row_idx, column=2).alignment = align_center
+            ws2.cell(row=row_idx, column=2).font = err_font
+            ws2.cell(row=row_idx, column=2).fill = err_fill
+            ws2.cell(row=row_idx, column=3).alignment = align_center
+
+    # Sheet 3: Danh sách toàn bộ file đã quét
+    ws3 = wb.create_sheet(title="Danh_Sach_Toan_Bo_File")
+    ws3.append(["STT", "Tên File", "Đường Dẫn Trong Drive", "File ID"])
+    for cell in ws3[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = align_center
+
+    for idx, f in enumerate(all_files, 1):
+        ws3.append([idx, f.get('name', ''), f.get('path', ''), f.get('id', '')])
+        ws3.cell(row=idx+1, column=1).alignment = align_center
+
+    # Tự động căn chỉnh độ rộng cột
+    for ws in [ws1, ws2, ws3]:
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
+
+    wb.save(output_filename)
+    print(f"\n[EXCEL EXPORT] Đã tự động xuất báo cáo đầy đủ ({len(all_errors)} lỗi) ra file Excel:")
+    print(f" 📂 File Excel: {os.path.abspath(output_filename)}")
+
+
+# ==============================================================================
+# 4. QUẢN LÝ QUÉT & BÁO CÁO
+# ==============================================================================
+def process_drive_validation(url_or_id, service_mgr):
     folder_id = extract_folder_id(url_or_id)
     
     print("\n" + "="*85)
@@ -534,21 +624,49 @@ def process_drive_validation(url_or_id, service_mgr, check_file_content=False):
     print(f"TỔNG CỘNG: {len(asset_folders)} folder tài sản | {len(all_files)} tổng file")
     print("="*85)
 
+    print(f"\nStep 3: Thực hiện kiểm tra Nội dung File Excel (Group 3 & Group 4) cho {len(all_files)} file...")
+    content_errors = []
+    
+    user_choice = input("Bạn có muốn tải & kiểm tra chi tiết nội dung dữ liệu bên trong file Excel (Group 3 & Group 4) không? (y/n, mặc định y): ").strip().lower()
+    if user_choice in ["", "y", "yes"]:
+        print("  Đang chạy kiểm tra đa luồng (multi-thread 12 workers) bằng 8 Service Accounts...")
+        completed = 0
+        total = len(all_files)
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            future_map = {executor.submit(fetch_and_check_single_file, service_mgr, f): f for f in all_files}
+            for future in as_completed(future_map):
+                completed += 1
+                if completed % 100 == 0 or completed == total:
+                    print(f"  [TIẾN ĐỘ] Đã kiểm tra nội dung {completed}/{total} file...", flush=True)
+                res = future.result()
+                if res:
+                    for err in res:
+                        if err.get('status') == 'LỖI':
+                            content_errors.append(err)
+
+    all_errors = struct_errors + content_errors
+
     print("\n" + "="*85)
-    print(f" 📋 KẾT QUẢ CHECK VALIDATION CẤU TRÚC (Group 1 & Group 2): {len(struct_errors)} LỖI BỊ PHÁT HIỆN")
+    print(f" 📋 TỔNG KẾT VALIDATION (Group 1-4): {len(all_errors)} LỖI BỊ PHÁT HIỆN")
     print("="*85)
-    if not struct_errors:
-        print("  🎉 XIN CHÚC MỪNG! Toàn bộ file và cấu trúc folder Drive HOÀN TOÀN HỢP LỆ!")
+    if not all_errors:
+        print("  🎉 XIN CHÚC MỪNG! Toàn bộ file và dữ liệu HOÀN TOÀN HỢP LỆ!")
     else:
-        for err in struct_errors[:50]:  # Hiển thị tối đa 50 lỗi đầu tiên
+        for err in all_errors[:20]:
             print(f"  ❌ [{err['status']}] [Group {err['group']}] File/Mục: {err['file_name']} -> {err['description']}")
-        if len(struct_errors) > 50:
-            print(f"  ... và còn {len(struct_errors) - 50} lỗi khác.")
-    print("="*85 + "\n")
+        if len(all_errors) > 20:
+            print(f"  ... và còn {len(all_errors) - 20} lỗi khác (Xem chi tiết trong file Excel export).")
+    print("="*85)
+
+    # Tự động xuất ra file Excel ngay trong thư mục chứa file script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+    excel_filename = os.path.join(script_dir, f"Bao_Cao_Validation_Drive_{timestamp_str}.xlsx")
+    export_validation_report_to_excel(excel_filename, report_data, all_errors, all_files)
 
     return {
         "total_files": len(all_files),
-        "struct_errors": struct_errors
+        "all_errors": all_errors
     }
 
 
