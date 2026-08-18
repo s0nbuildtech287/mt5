@@ -139,12 +139,18 @@ def scan_asset_folder(service_mgr, folder_id, current_path=""):
             item['path'] = item_path
             all_files.append(item)
             
-            if not item_name.lower().endswith('.xlsx'):
+            EXCEL_MIME_TYPES = {
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel",
+                "application/vnd.google-apps.spreadsheet"
+            }
+            is_excel = item_name.lower().endswith(('.xlsx', '.xls')) or mime_type in EXCEL_MIME_TYPES
+            if not is_excel:
                 unexpected_items.append({
                     "id": item_id,
                     "name": item_name,
-                    "type": "File lạ (Không phải .xlsx)",
-                    "reason": "File không có định dạng .xlsx",
+                    "type": "File lạ (Không phải file Excel)",
+                    "reason": f"File không phải định dạng Excel/Google Sheet (MIME: {mime_type})",
                     "path": item_path
                 })
             
@@ -364,7 +370,8 @@ def process_drive_validation(url_or_id, service_mgr):
         files_in_asset, sub_unexpected = scan_asset_folder(service_mgr, asset_id, asset_path)
         raw_unexpected_items.extend(sub_unexpected)
         
-        xlsx_count = sum(1 for f in files_in_asset if f.get('name', '').lower().endswith('.xlsx'))
+        EXCEL_MIME_TYPES = {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/vnd.ms-excel", "application/vnd.google-apps.spreadsheet"}
+        xlsx_count = sum(1 for f in files_in_asset if f.get('name', '').lower().endswith(('.xlsx', '.xls')) or f.get('mimeType') in EXCEL_MIME_TYPES)
 
         for f in files_in_asset:
             fname = f.get('name', '')
