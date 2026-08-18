@@ -409,16 +409,10 @@ def process_drive_validation(url_or_id, service_mgr):
             "status": "Đủ chiến lược" if len(b_files) >= 4 else "Ít chiến lược"
         })
 
-    # --- IN BẢNG THỐNG KÊ BƯỚC 1 ---
+    # --- IN TỔNG SỐ LƯỢNG FILE BƯỚC 1 ---
+    total_xlsx_count = sum(row['xlsx_files'] for row in report_data)
     print("\n" + "="*105)
-    print(" 📊 1. BẢNG THỐNG KÊ SỐ LƯỢNG FILE THEO FOLDER TÀI SẢN")
-    print("="*105)
-    print(f"{'STT':<5} | {'Tên Folder Tài Sản':<30} | {'Tổng số File':<20} | {'Số file .xlsx':<20}")
-    print("-" * 105)
-    for i, row in enumerate(report_data, 1):
-        print(f"{i:<5} | {row['folder']:<30} | {row['total_files']:<20} | {row['xlsx_files']:<20}")
-    print("-" * 105)
-    print(f"TỔNG CỘNG: {len(asset_folders)} FOLDER TÀI SẢN | {len(all_files)} TỔNG NGUYÊN BẢN FILE")
+    print(f" 📊 TỔNG SỐ LƯỢNG FILE: {len(all_files)} TỔNG FILE ({total_xlsx_count} file .xlsx) | Thuộc {len(asset_folders)} folder tài sản")
     print("="*105)
 
     print("\n" + "="*105)
@@ -482,14 +476,7 @@ def process_drive_validation(url_or_id, service_mgr):
         total_unexpected = len(unexpected_items)
         
         print("\n" + "="*105)
-        print(" 📊 BẢNG THỐNG KÊ CHI TIẾT ĐỊNH DẠNG TÊN FILE THEO TÀI SẢN")
-        print("="*105)
-        print(f"{'STT':<5} | {'Tên Folder Tài Sản':<22} | {'Tổng số File':<12} | {'File .xlsx':<12} | {'Tên Hợp Lệ':<12} | {'Tên SAI':<10} | {'Mục Lạ':<8}")
-        print("-" * 105)
-        for i, row in enumerate(report_data, 1):
-            print(f"{i:<5} | {row['folder']:<22} | {row['total_files']:<12} | {row['xlsx_files']:<12} | {row['valid_name_files']:<12} | {row['invalid_name_files']:<10} | {row['unexpected_count']:<8}")
-        print("-" * 105)
-        print(f"TỔNG KẾT BƯỚC 2: {total_unexpected} MỤC LẠ & LỖI ĐỊNH DẠNG TÊN BỊ PHÁT HIỆN!")
+        print(f" 📊 TỔNG KẾT BƯỚC 2: PHÁT HIỆN {total_unexpected} MỤC LẠ & LỖI ĐỊNH DẠNG TÊN!")
         print("="*105)
 
         if unexpected_items:
