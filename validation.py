@@ -112,7 +112,6 @@ def list_items_in_folder(service_mgr, folder_id):
 def scan_asset_folder(service_mgr, folder_id, current_path=""):
     """
     Duyệt đệ quy các item trong folder tài sản.
-    Cảnh báo nếu phát hiện subfolder lạ hoặc file không phải .xlsx
     """
     all_files = []
     unexpected_items = []
@@ -126,7 +125,6 @@ def scan_asset_folder(service_mgr, folder_id, current_path=""):
         item_path = f"{current_path}/{item_name}" if current_path else item_name
         
         if mime_type == 'application/vnd.google-apps.folder':
-            # Phát hiện folder lạ nằm trong folder tài sản
             unexpected_items.append({
                 "id": item_id,
                 "name": item_name,
@@ -134,7 +132,6 @@ def scan_asset_folder(service_mgr, folder_id, current_path=""):
                 "reason": "Phát hiện thư mục con lạ nằm bên trong folder tài sản",
                 "path": item_path
             })
-            # Vẫn duyệt đệ quy các file bên trong subfolder đó
             sub_files, sub_unexpected = scan_asset_folder(service_mgr, item_id, item_path)
             all_files.extend(sub_files)
             unexpected_items.extend(sub_unexpected)
@@ -142,7 +139,6 @@ def scan_asset_folder(service_mgr, folder_id, current_path=""):
             item['path'] = item_path
             all_files.append(item)
             
-            # Check file lạ không có đuôi .xlsx
             if not item_name.lower().endswith('.xlsx'):
                 unexpected_items.append({
                     "id": item_id,
@@ -158,16 +154,13 @@ def scan_asset_folder(service_mgr, folder_id, current_path=""):
 def check_filename_format(name):
     """
     Kiểm tra tên file đúng chuẩn định dạng: {BotId}{Symbol}{Timeframe}{OrderType}
-    Trích xuất bot_id, symbol, timeframe, order_type
     Ví dụ hợp lệ: 001BTCUSDH1OB (.xlsx)
     """
     base = re.sub(r'\.[^/.]+$', '', name)
     
-    # 1. Check viết HOA toàn bộ
     if base != base.upper():
         return False, "Tên file phải viết HOA toàn bộ", None, None
 
-    # 2. Check BotId 3 chữ số
     bot_id_match = re.match(r'^(\d{3})', base)
     if not bot_id_match:
         return False, "BotId không hợp lệ (phải là 3 chữ số đầu tiên)", None, None
@@ -175,7 +168,6 @@ def check_filename_format(name):
     bot_id = bot_id_match.group(1)
     rest = base[3:]
 
-    # 3. Check Symbol
     symbol = None
     after_symbol = rest
     for sym in VALID_SYMBOLS:
@@ -187,7 +179,6 @@ def check_filename_format(name):
     if not symbol:
         return False, "Symbol không nằm trong danh sách hợp lệ", bot_id, None
 
-    # 4. Check Timeframe (H1 hoặc H4)
     timeframe = None
     after_tf = after_symbol
     for tf in VALID_TIMEFRAMES:
@@ -199,7 +190,6 @@ def check_filename_format(name):
     if not timeframe:
         return False, "Khung thời gian không hợp lệ (phải là H1 hoặc H4)", bot_id, symbol
 
-    # 5. Check OrderType (OB hoặc OS)
     order_type = None
     for ot in VALID_ORDER_TYPES:
         if after_tf == ot:
@@ -212,8 +202,8 @@ def check_filename_format(name):
     return True, "Hợp lệ", bot_id, symbol
 
 
-def export_count_report_to_excel(output_filename, report_data, bot_summary, unexpected_items, all_files):
-    """Xuất thống kê số lượng file, danh sách con Bot, và danh sách file/folder lạ ra Excel"""
+def export_count_report_to_excel(output_filename, report_data, bot_summary, unexpected_items, all_files, is_detailed_checked):
+    """Xuất thống kê ra Excel dựa trên kết quả các bước đã chạy"""
     wb = openpyxl.Workbook()
 
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
@@ -225,25 +215,32 @@ def export_count_report_to_excel(output_filename, report_data, bot_summary, unex
     # Sheet 1: Thống kê số lượng file theo folder tài sản
     ws1 = wb.active
     ws1.title = "Thong_Ke_Tai_San"
-    ws1.append(["STT", "Tên Folder Tài Sản", "Tổng Số File", "Số File .xlsx", "Tên Hợp Lệ", "Tên SAI Định Dạng", "Số Mục Lạ"])
+    if is_detailed_checked:
+        ws1.append(["STT", "Tên Folder Tài Sản", "Tổng Số File", "Số File .xlsx", "Tên Hợp Lệ", "Tên SAI Định Dạng", "Số Mục Lạ"])
+    else:
+        ws1.append(["STT", "Tên Folder Tài Sản", "Tổng Số File", "Số File .xlsx"])
+    
     for cell in ws1[1]:
         cell.font = header_font
         cell.fill = header_fill
         cell.alignment = align_center
 
     for idx, row in enumerate(report_data, 1):
-        ws1.append([idx, row['folder'], row['total_files'], row['xlsx_files'], row['valid_name_files'], row['invalid_name_files'], row['unexpected_count']])
+        if is_detailed_checked:
+            ws1.append([idx, row['folder'], row['total_files'], row['xlsx_files'], row.get('valid_name_files', 0), row.get('invalid_name_files', 0), row.get('unexpected_count', 0)])
+            ws1.cell(row=idx+1, column=5).alignment = align_center
+            ws1.cell(row=idx+1, column=6).alignment = align_center
+            ws1.cell(row=idx+1, column=7).alignment = align_center
+            if row.get('invalid_name_files', 0) > 0 or row.get('unexpected_count', 0) > 0:
+                ws1.cell(row=idx+1, column=6).font = err_font
+                ws1.cell(row=idx+1, column=7).font = err_font
+                ws1.cell(row=idx+1, column=6).fill = err_fill
+        else:
+            ws1.append([idx, row['folder'], row['total_files'], row['xlsx_files']])
+            
         ws1.cell(row=idx+1, column=1).alignment = align_center
         ws1.cell(row=idx+1, column=3).alignment = align_center
         ws1.cell(row=idx+1, column=4).alignment = align_center
-        ws1.cell(row=idx+1, column=5).alignment = align_center
-        ws1.cell(row=idx+1, column=6).alignment = align_center
-        ws1.cell(row=idx+1, column=7).alignment = align_center
-        
-        if row['invalid_name_files'] > 0 or row['unexpected_count'] > 0:
-            ws1.cell(row=idx+1, column=6).font = err_font
-            ws1.cell(row=idx+1, column=7).font = err_font
-            ws1.cell(row=idx+1, column=6).fill = err_fill
 
     # Sheet 2: Thống kê danh sách các con Bot (Bot ID)
     ws_bot = wb.create_sheet(title="Thong_Ke_Danh_Sach_Bot")
@@ -260,24 +257,25 @@ def export_count_report_to_excel(output_filename, report_data, bot_summary, unex
         ws_bot.cell(row=idx+1, column=3).alignment = align_center
         ws_bot.cell(row=idx+1, column=5).alignment = align_center
 
-    # Sheet 3: Danh sách các File/Folder LẠ hoặc SAI định dạng
-    ws2 = wb.create_sheet(title="Danh_Sach_Muc_La_Va_Loi")
-    ws2.append(["STT", "Tên Mục / File", "Loại Mục Lạ / Lỗi", "Mô Tả Chi Tiết / Lý Do", "Đường Dẫn Trong Drive", "File ID"])
-    for cell in ws2[1]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = align_center
+    # Sheet 3 (Nếu đã check chi tiết): Danh sách các File/Folder LẠ hoặc SAI định dạng
+    if is_detailed_checked:
+        ws2 = wb.create_sheet(title="Danh_Sach_Muc_La_Va_Loi")
+        ws2.append(["STT", "Tên Mục / File", "Loại Mục Lạ / Lỗi", "Mô Tả Chi Tiết / Lý Do", "Đường Dẫn Trong Drive", "File ID"])
+        for cell in ws2[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = align_center
 
-    if not unexpected_items:
-        ws2.append([1, "-", "OK", "TẤT CẢ FILE VÀ FOLDER ĐỀU CHUẨN ĐỊNH DẠNG VÀ CẤU TRÚC!", "-", "-"])
-    else:
-        for idx, item in enumerate(unexpected_items, 1):
-            ws2.append([idx, item.get('name', ''), item.get('type', ''), item.get('reason', ''), item.get('path', ''), item.get('id', '')])
-            row_idx = idx + 1
-            ws2.cell(row=row_idx, column=1).alignment = align_center
-            ws2.cell(row=row_idx, column=2).font = err_font
-            ws2.cell(row=row_idx, column=2).fill = err_fill
-            ws2.cell(row=row_idx, column=3).alignment = align_center
+        if not unexpected_items:
+            ws2.append([1, "-", "OK", "TẤT CẢ FILE VÀ FOLDER ĐỀU CHUẨN ĐỊNH DẠNG VÀ CẤU TRÚC!", "-", "-"])
+        else:
+            for idx, item in enumerate(unexpected_items, 1):
+                ws2.append([idx, item.get('name', ''), item.get('type', ''), item.get('reason', ''), item.get('path', ''), item.get('id', '')])
+                row_idx = idx + 1
+                ws2.cell(row=row_idx, column=1).alignment = align_center
+                ws2.cell(row=row_idx, column=2).font = err_font
+                ws2.cell(row=row_idx, column=2).fill = err_fill
+                ws2.cell(row=row_idx, column=3).alignment = align_center
 
     # Sheet 4: Danh sách toàn bộ file đã quét
     ws3 = wb.create_sheet(title="Danh_Sach_Toan_Bo_File")
@@ -288,26 +286,30 @@ def export_count_report_to_excel(output_filename, report_data, bot_summary, unex
         cell.alignment = align_center
 
     for idx, f in enumerate(all_files, 1):
-        status_text = "Hợp lệ" if f.get('is_valid_name') else "SAI định dạng / Lạ"
+        status_text = "Hợp lệ" if f.get('is_valid_name', True) else "SAI định dạng / Lạ"
         bot_id_str = f.get('bot_id', '-')
-        ws3.append([idx, f.get('name', ''), bot_id_str, status_text, f.get('name_reason', ''), f.get('path', ''), f.get('id', '')])
+        ws3.append([idx, f.get('name', ''), bot_id_str, status_text, f.get('name_reason', '-'), f.get('path', ''), f.get('id', '')])
         row_idx = idx + 1
         ws3.cell(row=row_idx, column=1).alignment = align_center
         ws3.cell(row=row_idx, column=3).alignment = align_center
         ws3.cell(row=row_idx, column=4).alignment = align_center
-        if not f.get('is_valid_name'):
+        if is_detailed_checked and not f.get('is_valid_name', True):
             ws3.cell(row=row_idx, column=4).font = err_font
             ws3.cell(row=row_idx, column=4).fill = err_fill
 
     # Tự động căn chỉnh độ rộng cột
-    for ws in [ws1, ws_bot, ws2, ws3]:
+    sheets = [ws1, ws_bot, ws3]
+    if is_detailed_checked:
+        sheets.append(ws2)
+
+    for ws in sheets:
         for col in ws.columns:
             max_len = max(len(str(cell.value or '')) for cell in col)
             col_letter = get_column_letter(col[0].column)
             ws.column_dimensions[col_letter].width = max(max_len + 4, 14)
 
     wb.save(output_filename)
-    print(f"\n[EXCEL EXPORT] Đã xuất báo cáo kiểm tra cấu trúc Bot, Drive & tên file ra Excel:")
+    print(f"\n[EXCEL EXPORT] Đã xuất thành công báo cáo ra file Excel:")
     print(f" 📂 File Excel: {os.path.abspath(output_filename)}")
 
 
@@ -315,25 +317,23 @@ def process_drive_validation(url_or_id, service_mgr):
     folder_id = extract_folder_id(url_or_id)
     
     print("\n" + "="*105)
-    print(f" 🚀 ĐẾM BOT, ĐẾM FILE & KIỂM TRA CẤU TRÚC DRIVE / FILE LẠ (LINK DRIVE ID: {folder_id})")
+    print(f" 🚀 BƯỚC 1: ĐẾM SỐ LƯỢNG FILE VÀ THỐNG KÊ CON BOT (LINK DRIVE ID: {folder_id})")
     print("="*105)
 
-    print("Step 1: Đang quét thư mục Drive Root...")
+    print("Đang quét cấu trúc danh sách thư mục và file trên Drive...")
     top_items = list_items_in_folder(service_mgr, folder_id)
     
     root_files = [item for item in top_items if item.get('mimeType') != 'application/vnd.google-apps.folder']
     asset_folders = [item for item in top_items if item.get('mimeType') == 'application/vnd.google-apps.folder']
     
     all_files = []
-    unexpected_items = []
+    raw_unexpected_items = []
     report_data = []
 
-    # 1. Phát hiện file lạ nằm trực tiếp tại Root
     if root_files:
-        print(f"  ⚠️ Phát hiện {len(root_files)} file nằm trực tiếp tại Drive Root!")
         for rf in root_files:
             rf_name = rf.get('name', '')
-            unexpected_items.append({
+            raw_unexpected_items.append({
                 "id": rf.get('id'),
                 "name": rf_name,
                 "type": "File lạ tại Drive Root",
@@ -342,20 +342,17 @@ def process_drive_validation(url_or_id, service_mgr):
             })
             all_files.append(rf)
 
-    # 2. Kiểm tra các Folder tài sản ở Root
-    print(f"Step 2: Tìm thấy {len(asset_folders)} folder tài sản ở Root. Đang quét từng folder...")
-    bot_map = {}  # bot_id -> list of file dicts
+    bot_map = {}
 
     for idx, asset in enumerate(asset_folders, 1):
         asset_id = asset.get('id')
         asset_name = asset.get('name', '').strip()
         asset_path = asset_name
         
-        # Check nếu tên folder ở Root không chứa mã Symbol chuẩn nào
         asset_upper = asset_name.upper()
         is_asset_known = any(sym in asset_upper for sym in VALID_SYMBOLS)
         if not is_asset_known:
-            unexpected_items.append({
+            raw_unexpected_items.append({
                 "id": asset_id,
                 "name": asset_name,
                 "type": "Folder lạ tại Drive Root",
@@ -363,42 +360,31 @@ def process_drive_validation(url_or_id, service_mgr):
                 "path": f"/[Drive Root]/{asset_name}"
             })
 
-        print(f"  [{idx}/{len(asset_folders)}] Đang đếm & check folder tài sản: {asset_name} ...", end="", flush=True)
+        print(f"  [{idx}/{len(asset_folders)}] Đang đếm file trong folder: {asset_name} ...", end="", flush=True)
         files_in_asset, sub_unexpected = scan_asset_folder(service_mgr, asset_id, asset_path)
+        raw_unexpected_items.extend(sub_unexpected)
         
-        valid_in_asset = 0
-        invalid_in_asset = 0
-        xlsx_count = 0
+        xlsx_count = sum(1 for f in files_in_asset if f.get('name', '').lower().endswith('.xlsx'))
 
         for f in files_in_asset:
             fname = f.get('name', '')
-            if fname.lower().endswith('.xlsx'):
-                xlsx_count += 1
-            
-            is_valid, reason, bot_id, symbol = check_filename_format(fname)
-            f['is_valid_name'] = is_valid
-            f['name_reason'] = reason
+            bot_id_match = re.match(r'^(\d{3})', fname)
+            bot_id = bot_id_match.group(1) if bot_id_match else None
             f['bot_id'] = bot_id or "-"
-            f['symbol'] = symbol or "-"
+            
+            # Trích xuất sơ bộ Symbol
+            extracted_sym = "-"
+            fname_upper = fname.upper()
+            for sym in VALID_SYMBOLS:
+                if sym in fname_upper:
+                    extracted_sym = sym
+                    break
+            f['symbol'] = extracted_sym
 
             if bot_id:
                 if bot_id not in bot_map:
                     bot_map[bot_id] = []
                 bot_map[bot_id].append(f)
-
-            if is_valid:
-                valid_in_asset += 1
-            else:
-                invalid_in_asset += 1
-                unexpected_items.append({
-                    "id": f.get('id'),
-                    "name": fname,
-                    "type": "Tên file sai định dạng",
-                    "reason": reason,
-                    "path": f.get('path')
-                })
-
-        unexpected_in_asset_count = len(sub_unexpected) + (1 if not is_asset_known else 0)
 
         all_files.extend(files_in_asset)
 
@@ -406,13 +392,11 @@ def process_drive_validation(url_or_id, service_mgr):
             "folder": asset_name,
             "total_files": len(files_in_asset),
             "xlsx_files": xlsx_count,
-            "valid_name_files": valid_in_asset,
-            "invalid_name_files": invalid_in_asset,
-            "unexpected_count": unexpected_in_asset_count
+            "raw_files_in_asset": files_in_asset
         })
-        print(f" -> Done ({len(files_in_asset)} files | {invalid_in_asset} tên sai | {len(sub_unexpected)} mục lạ)")
+        print(f" -> Done ({len(files_in_asset)} files)")
 
-    # 3. Thống kê danh sách con Bot (Bot ID)
+    # 1. Thống kê danh sách con Bot
     bot_summary = []
     sorted_bot_ids = sorted(bot_map.keys())
     for b_id in sorted_bot_ids:
@@ -425,8 +409,20 @@ def process_drive_validation(url_or_id, service_mgr):
             "status": "Đủ chiến lược" if len(b_files) >= 4 else "Ít chiến lược"
         })
 
+    # --- IN BẢNG THỐNG KÊ BƯỚC 1 ---
     print("\n" + "="*105)
-    print(" 🤖 BẢNG THỐNG KÊ SỐ LƯỢNG CON BOT (BOT ID) VÀ CHIẾN LƯỢC")
+    print(" 📊 1. BẢNG THỐNG KÊ SỐ LƯỢNG FILE THEO FOLDER TÀI SẢN")
+    print("="*105)
+    print(f"{'STT':<5} | {'Tên Folder Tài Sản':<30} | {'Tổng số File':<20} | {'Số file .xlsx':<20}")
+    print("-" * 105)
+    for i, row in enumerate(report_data, 1):
+        print(f"{i:<5} | {row['folder']:<30} | {row['total_files']:<20} | {row['xlsx_files']:<20}")
+    print("-" * 105)
+    print(f"TỔNG CỘNG: {len(asset_folders)} FOLDER TÀI SẢN | {len(all_files)} TỔNG NGUYÊN BẢN FILE")
+    print("="*105)
+
+    print("\n" + "="*105)
+    print(" 🤖 2. BẢNG THỐNG KÊ SỐ LƯỢNG CON BOT (BOT ID) VÀ SỐ CHIẾN LƯỢC")
     print("="*105)
     print(f"{'STT':<5} | {'Mã Con Bot':<15} | {'Số Lượng Chiến Lược (File)':<30} | {'Danh Sách Tài Sản (Symbol)':<35}")
     print("-" * 105)
@@ -437,49 +433,101 @@ def process_drive_validation(url_or_id, service_mgr):
     print(f"TỔNG CỘNG: {len(bot_summary)} CON BOT duy nhất được phát hiện!")
     print("="*105)
 
-    print("\n" + "="*105)
-    print(" 📊 BẢNG THỐNG KÊ SỐ LƯỢNG FILE VÀ CẤU TRÚC THEO FOLDER TÀI SẢN")
-    print("="*105)
-    print(f"{'STT':<5} | {'Tên Folder Tài Sản':<22} | {'Tổng số File':<12} | {'File .xlsx':<12} | {'Tên Hợp Lệ':<12} | {'Tên SAI':<10} | {'Mục Lạ':<8}")
-    print("-" * 105)
-    for i, row in enumerate(report_data, 1):
-        print(f"{i:<5} | {row['folder']:<22} | {row['total_files']:<12} | {row['xlsx_files']:<12} | {row['valid_name_files']:<12} | {row['invalid_name_files']:<10} | {row['unexpected_count']:<8}")
-    print("-" * 105)
+    # --- BƯỚC HỎI USER CÓ KIỂM TRA ĐỊNH DẠNG TÊN / MỤC LẠ KHÔNG ---
+    print("\n" + "❓ " * 15)
+    choice_check = input("👉 Đã thống kê xong số lượng. Bạn có muốn tiếp tục kiểm tra CHI TIẾT ĐỊNH DẠNG TÊN FILE & PHÁT HIỆN FILE/FOLDER LẠ không? (y/n, mặc định y): ").strip().lower()
     
-    total_unexpected = len(unexpected_items)
-    print(f"TỔNG KẾT CHUNG: {len(bot_summary)} CON BOT | {len(asset_folders)} FOLDER TÀI SẢN | {len(all_files)} TỔNG FILE | {total_unexpected} MỤC LẠ/LỖI")
-    print("="*105)
+    is_detailed_checked = False
+    unexpected_items = []
 
-    if unexpected_items:
-        print("\n" + "⚠️ " * 20)
-        print(f" ❌ PHÁT HIỆN {total_unexpected} MỤC LẠ / FILE SAI ĐỊNH DẠNG (Tối đa 25 mục đầu tiên):")
+    if choice_check in ["", "y", "yes"]:
+        is_detailed_checked = True
+        print("\n" + "="*105)
+        print(" 🚀 BƯỚC 2: KIỂM TRA ĐỊNH DẠNG TÊN FILE & PHÁT HIỆN FILE / FOLDER LẠ")
         print("="*105)
-        for idx, item in enumerate(unexpected_items[:25], 1):
-            print(f"  {idx}. [{item['type']}] {item['name']} -> {item['reason']} (Đường dẫn: {item['path']})")
-        if total_unexpected > 25:
-            print(f"  ... và còn {total_unexpected - 25} mục khác (Xem chi tiết trong file Excel export).")
+
+        unexpected_items = list(raw_unexpected_items)
+
+        for row in report_data:
+            valid_in_asset = 0
+            invalid_in_asset = 0
+            unexpected_in_asset = 0
+
+            for f in row['raw_files_in_asset']:
+                fname = f.get('name', '')
+                is_valid, reason, b_id, sym = check_filename_format(fname)
+                f['is_valid_name'] = is_valid
+                f['name_reason'] = reason
+
+                if is_valid:
+                    valid_in_asset += 1
+                else:
+                    invalid_in_asset += 1
+                    unexpected_items.append({
+                        "id": f.get('id'),
+                        "name": fname,
+                        "type": "Tên file sai định dạng",
+                        "reason": reason,
+                        "path": f.get('path')
+                    })
+
+            row['valid_name_files'] = valid_in_asset
+            row['invalid_name_files'] = invalid_in_asset
+            
+            # Đếm mục lạ thuộc asset folder này
+            asset_prefix = f"/{row['folder']}/"
+            asset_unexp = sum(1 for item in unexpected_items if item.get('path', '').startswith(row['folder']))
+            row['unexpected_count'] = asset_unexp
+
+        total_unexpected = len(unexpected_items)
+        
+        print("\n" + "="*105)
+        print(" 📊 BẢNG THỐNG KÊ CHI TIẾT ĐỊNH DẠNG TÊN FILE THEO TÀI SẢN")
         print("="*105)
+        print(f"{'STT':<5} | {'Tên Folder Tài Sản':<22} | {'Tổng số File':<12} | {'File .xlsx':<12} | {'Tên Hợp Lệ':<12} | {'Tên SAI':<10} | {'Mục Lạ':<8}")
+        print("-" * 105)
+        for i, row in enumerate(report_data, 1):
+            print(f"{i:<5} | {row['folder']:<22} | {row['total_files']:<12} | {row['xlsx_files']:<12} | {row['valid_name_files']:<12} | {row['invalid_name_files']:<10} | {row['unexpected_count']:<8}")
+        print("-" * 105)
+        print(f"TỔNG KẾT BƯỚC 2: {total_unexpected} MỤC LẠ & LỖI ĐỊNH DẠNG TÊN BỊ PHÁT HIỆN!")
+        print("="*105)
+
+        if unexpected_items:
+            print("\n" + "⚠️ " * 20)
+            print(f" ❌ DANH SÁCH MỤC LẠ / FILE SAI ĐỊNH DẠNG (Tối đa 25 mục đầu tiên):")
+            print("="*105)
+            for idx, item in enumerate(unexpected_items[:25], 1):
+                print(f"  {idx}. [{item['type']}] {item['name']} -> {item['reason']} (Đường dẫn: {item['path']})")
+            if total_unexpected > 25:
+                print(f"  ... và còn {total_unexpected - 25} mục khác (Xem chi tiết trong file Excel).")
+            print("="*105)
+        else:
+            print("\n  🎉 CHÚC MỪNG! CHÍNH XÁC TOÀN BỘ FILE VÀ CẤU TRÚC DRIVE ĐỀU CHUẨN HỢP LỆ!")
     else:
-        print("\n  🎉 CHÚC MỪNG! CẤU TRÚC DRIVE, BOT VÀ TÊN FILE HOÀN TOÀN CHUẨN KHÔNG CÓ FILE/FOLDER LẠ!")
+        print("\n  ⏩ Đã bỏ qua bước kiểm tra chi tiết định dạng tên file.")
 
-    # Tự động xuất ra file Excel ngay trong thư mục chứa file script
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    excel_filename = os.path.join(script_dir, f"Thong_Ke_Bot_Va_Drive_{timestamp_str}.xlsx")
-    export_count_report_to_excel(excel_filename, report_data, bot_summary, unexpected_items, all_files)
+    # --- BƯỚC HỎI USER CÓ XUẤT FILE EXCEL KHÔNG ---
+    print("\n" + "❓ " * 15)
+    choice_excel = input("👉 Bạn có muốn xuất toàn bộ báo cáo kết quả ra FILE EXCEL (.xlsx) không? (y/n, mặc định y): ").strip().lower()
+    
+    if choice_excel in ["", "y", "yes"]:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        excel_filename = os.path.join(script_dir, f"Bao_Cao_Thong_Ke_Drive_{timestamp_str}.xlsx")
+        export_count_report_to_excel(excel_filename, report_data, bot_summary, unexpected_items, all_files, is_detailed_checked)
+    else:
+        print("\n  ⏩ Đã bỏ qua bước xuất file Excel.")
 
     return {
         "total_bots": len(bot_summary),
         "total_files": len(all_files),
-        "unexpected_items_count": total_unexpected,
-        "bot_summary": bot_summary,
         "report_data": report_data
     }
 
 
 def main():
     print("==========================================================================")
-    print("  TOOL ĐẾM BOT, ĐẾM FILE & KIỂM TRA CẤU TRÚC DRIVE OPTIMIZATION  ")
+    print("  TOOL THỐNG KÊ SỐ LƯỢNG FILE, CON BOT & CHECK VALIDATION DRIVE  ")
     print("==========================================================================")
 
     try:
@@ -495,7 +543,7 @@ def main():
         drive_links = [link.strip() for link in user_input.split(",") if link.strip()]
 
     if not drive_links:
-        print("Không có link Google Drive nào me được nhập.")
+        print("Không có link Google Drive nào được nhập.")
         return
 
     for link in drive_links:
@@ -504,7 +552,7 @@ def main():
         except Exception as e:
             print(f"Lỗi trong quá trình kiểm tra link '{link}': {e}")
 
-    print("\nDONE! Đã hoàn thành đếm Bot, đếm file và kiểm tra cấu trúc Drive.")
+    print("\nDONE! Hoàn thành quy trình kiểm tra.")
 
 
 if __name__ == "__main__":
