@@ -84,7 +84,8 @@ def list_items_in_folder(service_mgr, folder_id):
         try:
             response = service.files().list(
                 q=query,
-                spaces='drive',
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
                 fields='nextPageToken, files(id, name, mimeType, size, modifiedTime)',
                 pageToken=page_token,
                 pageSize=1000
@@ -423,15 +424,7 @@ def process_drive_validation(url_or_id, service_mgr):
     print("="*105)
 
     print("\n" + "="*105)
-    print(" 🤖 2. BẢNG THỐNG KÊ SỐ LƯỢNG CON BOT (BOT ID) VÀ SỐ CHIẾN LƯỢC")
-    print("="*105)
-    print(f"{'STT':<5} | {'Mã Con Bot':<15} | {'Số Lượng Chiến Lược (File)':<30} | {'Danh Sách Tài Sản (Symbol)':<35}")
-    print("-" * 105)
-    for i, bot in enumerate(bot_summary, 1):
-        sym_str = ", ".join(bot['symbols'])
-        print(f"{i:<5} | Bot {bot['bot_id']:<11} | {bot['file_count']:<30} | {sym_str:<35}")
-    print("-" * 105)
-    print(f"TỔNG CỘNG: {len(bot_summary)} CON BOT duy nhất được phát hiện!")
+    print(f" 🤖 THỐNG KÊ BOT: Phát hiện tổng cộng {len(bot_summary)} CON BOT duy nhất!")
     print("="*105)
 
     # --- BƯỚC HỎI USER CÓ KIỂM TRA ĐỊNH DẠNG TÊN / MỤC LẠ KHÔNG ---
